@@ -1,0 +1,16 @@
+{
+  "data_dir": "/home/shiqual/overmesh",
+  "host": "0.0.0.0",
+  "port": 8085,
+  "refresh_interval": 3,
+  "max_messages": 2000,
+  "default_limit": 500,
+  "auto_refresh": true,
+  "theme_accent": "#4ade80",
+  "channel_names": {
+    "0": "Primary (NL)",
+    "2": "Off-Topic",
+    "3": "Emergency",
+    "7": "Lokaal"
+  }
+}

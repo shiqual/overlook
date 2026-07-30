@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     "default_limit": 500,
     "auto_refresh": True,
     "theme_accent": "#4ade80",
+    "channel_names": {},
 }
 
 
@@ -100,8 +101,8 @@ def api_settings():
             DATA_DIR = new_dir
             CFG["data_dir"] = new_dir
             save_config(CFG)
-        return jsonify({"ok": True, "config": {k: CFG[k] for k in DEFAULT_CONFIG}})
-    return jsonify({k: CFG[k] for k in DEFAULT_CONFIG})
+        return jsonify({"ok": True, "config": {k: CFG.get(k) for k in DEFAULT_CONFIG}})
+    return jsonify({k: CFG.get(k) for k in DEFAULT_CONFIG})
 
 
 @app.route("/api/dbs")
@@ -154,8 +155,10 @@ def api_channels():
         if d.get("last_ts", 0) > channels[ch]["last_ts"]:
             channels[ch]["last_ts"] = d["last_ts"]
     result = sorted(channels.values(), key=lambda x: x["channel"])
+    names = CFG.get("channel_names", {})
     for ch in result:
         ch["last_ago"] = _ago(ch["last_ts"], now)
+        ch["name"] = names.get(str(ch["channel"]), "")
     return jsonify(result)
 
 
@@ -232,7 +235,7 @@ def api_search():
         d["ts_str"] = datetime.fromtimestamp(d["ts"]).strftime("%d-%m-%Y %H:%M:%S") if d.get("ts") else "?"
         d["type"] = "dm" if (is_mc and d.get("subtype") == "dm") or (not is_mc and d.get("is_dm")) else "channel"
         result.append(d)
-    return jsonify({"messages": result, "has_more": has_more})
+    return jsonify({"messages": result, "has_more": has_more, "channel_names": CFG.get("channel_names", {})})
 
 
 HTML = r"""<!DOCTYPE html>
@@ -449,6 +452,11 @@ HTML = r"""<!DOCTYPE html>
       </div>
       <div class="hint">Bijvoorbeeld #4ade80 (groen), #60a5fa (blauw), #f59e0b (oranje)</div>
     </div>
+    <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
+      <h2>Kanaalnamen</h2>
+      <div class="hint" style="margin-bottom:12px">Geef zelf namen aan kanalen. Deze worden lokaal opgeslagen.</div>
+      <div id="channel-name-editor"></div>
+    </div>
     <div style="margin-top:20px;display:flex;gap:10px">
       <button class="active" style="padding:8px 24px" onclick="saveSettings()">Opslaan</button>
       <button onclick="loadSettings()">Annuleren</button>
@@ -483,6 +491,55 @@ async function loadSettings() {
   document.getElementById('s-accent').value = state.cfg.theme_accent || '#4ade80';
   document.getElementById('s-accent-hex').value = state.cfg.theme_accent || '#4ade80';
   setAccent(state.cfg.theme_accent || '#4ade80');
+  renderChannelNameEditor(state.cfg.channel_names || {});
+}
+
+function renderChannelNameEditor(names) {
+  const el = document.getElementById('channel-name-editor');
+  const keyOrder = Object.keys(names).sort((a,b)=>parseInt(a)-parseInt(b));
+  let html = '';
+  if (keyOrder.length) {
+    for (const ch of keyOrder) {
+      html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">' +
+        '<span style="font-size:12px;width:80px;flex-shrink:0">Kanaal ' + ch + '</span>' +
+        '<input class="chname-input" data-ch="' + ch + '" type="text" placeholder="Geen naam" value="' + escAttr(names[ch] || '') + '" style="flex:1">' +
+        '<button class="chname-remove" data-ch="' + ch + '" style="padding:3px 8px;font-size:11px;color:var(--red);border-color:var(--red)" onclick="removeChannelName(' + ch + ')">x</button></div>';
+    }
+  }
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">' +
+    '<span style="font-size:12px;width:80px;flex-shrink:0">Kanaal</span>' +
+    '<input id="chname-new-ch" type="number" min="0" max="255" placeholder="0" style="width:70px;flex:none">' +
+    '<input id="chname-new-name" type="text" placeholder="Naam" style="flex:1">' +
+    '<button style="padding:3px 10px;font-size:11px" onclick="addChannelName()">+ Toevoegen</button></div>';
+  el.innerHTML = html;
+}
+
+function addChannelName() {
+  const ch = document.getElementById('chname-new-ch').value;
+  const name = document.getElementById('chname-new-name').value.trim();
+  if (!ch || !name) return;
+  const names = Object.assign({}, state.cfg.channel_names || {});
+  names[ch] = name;
+  state.cfg.channel_names = names;
+  renderChannelNameEditor(names);
+  document.getElementById('chname-new-ch').value = '';
+  document.getElementById('chname-new-name').value = '';
+}
+
+function removeChannelName(ch) {
+  const names = Object.assign({}, state.cfg.channel_names || {});
+  delete names[ch];
+  state.cfg.channel_names = names;
+  renderChannelNameEditor(names);
+}
+
+function collectChannelNames() {
+  const names = {};
+  document.querySelectorAll('.chname-input').forEach(el => {
+    const val = el.value.trim();
+    if (val) names[el.dataset.ch] = val;
+  });
+  return names;
 }
 
 async function saveSettings() {
@@ -493,6 +550,7 @@ async function saveSettings() {
     default_limit: parseInt(document.getElementById('s-limit').value) || 500,
     auto_refresh: document.getElementById('s-auto-refresh').value === 'true',
     theme_accent: document.getElementById('s-accent-hex').value.trim() || '#4ade80',
+    channel_names: collectChannelNames(),
   };
   const r = await fetch('/api/settings', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
@@ -568,11 +626,14 @@ async function loadChannels() {
 
 function renderChannels() {
   const el = document.getElementById('channel-list');
-  let html = '<div style="padding:4px 0;font-size:10px;color:var(--muted)">Kanalen</div>';
+  let html = '<div style="padding:4px 0;font-size:10px;color:var(--muted)">Kanalen — <span style="cursor:pointer;color:var(--accent)" onclick="switchTab(\'settings\')">bewerk namen</span></div>';
   for (const ch of state.channels) {
     const active = ch.channel === state.selectedChannel ? 'active' : '';
+    const chName = ch.name || '';
     html += '<div class="channel-item ' + active + '" onclick="selectChannel(' + ch.channel + ')">' +
-      '<div><span class="channel-num">Kanaal ' + ch.channel + '</span></div>' +
+      '<div><span class="channel-num">CH' + ch.channel + '</span>' +
+      (chName ? '<span style="font-size:11px;color:var(--muted);margin-left:4px">' + esc(chName) + '</span>' : '') +
+      '</div>' +
       '<div style="text-align:right"><div class="channel-count">' + ch.cnt + ' berichten</div>' +
       '<div class="channel-last">' + ch.last_ago + '</div></div></div>';
   }
@@ -596,7 +657,7 @@ function onChannelRangeChange() {
 function setFilter(f) {
   state.filter = f;
   for (const id of ['filter-all', 'filter-ch', 'filter-dm'])
-    document.getElementById(id).className = (id.endsWith(f) ? 'active' : '') + ' flex:1 font-size:11px';
+    document.getElementById(id).className = id.endsWith(f) ? 'active' : '';
   state.lastId = null; state.messages = []; loadMessages();
 }
 
@@ -685,7 +746,9 @@ function renderMessages() {
     chCounts[ch] = (chCounts[ch] || 0) + 1;
     const mDate = m.ts_str ? m.ts_str.split(' ')[0] : '';
     if (mDate && mDate !== lastDate) { lastDate = mDate; html += '<div class="sticky-date">\u2014 ' + mDate + ' \u2014</div>'; }
-    const netTag = isMc ? '<span class="tag tag-mc">MC</span>' : '<span class="tag tag-mt">MT</span>';
+    const chName = (state.cfg.channel_names || {})[String(ch)] || '';
+    const chLabel = chName ? 'CH' + ch + ' ' + esc(chName) : 'CH' + ch;
+    const netTag = isMc ? '<span class="tag tag-mc">' + chLabel + '</span>' : '<span class="tag tag-mt">' + chLabel + '</span>';
     const typeClass = m.type === 'dm' ? 'type-dm' : 'type-channel';
     const from = m.from_name || m.from_id || '?';
     const to = m.to_name || m.to_id || '';
@@ -702,7 +765,11 @@ function renderMessages() {
   }
   el.innerHTML = html;
   const total = state.messages.length;
-  const chSummary = Object.entries(chCounts).sort((a,b)=>a[0]-b[0]).map(([ch,cnt])=>'CH'+ch+': '+cnt).join(', ');
+  const chNames = state.cfg.channel_names || {};
+  const chSummary = Object.entries(chCounts).sort((a,b)=>a[0]-b[0]).map(([ch,cnt])=>{
+    const n = chNames[ch] || '';
+    return 'CH' + ch + (n ? ' ' + n : '') + ': ' + cnt;
+  }).join(', ');
   document.getElementById('msg-count').textContent = total + ' berichten (' + chSummary + ')';
   if (state.tailing) el.scrollTop = el.scrollHeight;
 }
